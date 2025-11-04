@@ -1,118 +1,200 @@
-# 📘 Vledger — Inteligência para seus lançamentos contábeis
+# ⚙️ Vledger — Sistema de Classificação Contábil Automatizada
 
-O **Vledger** é um sistema em Python com interface Streamlit que automatiza o preenchimento de contas **Débito** e **Crédito** a partir de um **extrato financeiro**. Ele identifica palavras-chave nas descrições das transações e cruza essas informações com uma **tabela de referência de contas contábeis**.
-
----
-
-## 🚀 Funcionalidades principais
-
-* Upload de **extratos bancários** (CSV ou Excel)
-* Upload de **tabela de referência** de contas (CSV ou Excel)
-* Identificação automática de **palavras-chave** nas descrições
-* Preenchimento das colunas **Débito** e **Crédito** com base na referência
-* Opções de correspondência:
-
-  * Substring (padrão)
-  * Palavra inteira
-  * Expressão Regular (Regex)
-* Modo **case sensitive** (opcional)
-* Exportação dos resultados em **Excel (.xlsx)**
-* Geração de um **modelo de referência** pronto para download
+O **Vledger** é um sistema desenvolvido em **Python + Streamlit** para auxiliar na **classificação contábil automatizada de lançamentos bancários**.  
+Ele permite cadastrar **empresas**, definir **referências contábeis** (plano de contas) e classificar **extratos bancários** automaticamente, armazenando todos os dados em um banco **SQLite**.
 
 ---
 
-## 🧩 Estrutura do Projeto
+## 🚀 Funcionalidades Principais
 
-```
-Vledger/
-│
-├── Vledger_app.py          # Código principal do sistema
-├── README_Vledger.md       # Documentação do projeto
-├── referencia_modelo.csv   # Modelo de referência gerado pelo app (opcional)
-└── requirements.txt        # Dependências (opcional)
-```
+- 📁 Cadastro e gestão de **empresas**
+- 🔗 Cadastro de **referências contábeis** (relação descrição → débito/crédito)
+- ⚙️ **Classificação automática** de extratos (CSV ou XLSX)
+- 💾 Armazenamento de classificações no banco de dados local (`vledger.db`)
+- 📊 Exibição de classificações agrupadas por **ano e mês**
+- 📤 Exportação de classificações em Excel (.xlsx)
+- 🧩 Interface totalmente interativa via **Streamlit**
 
 ---
 
-## ⚙️ Instalação
+## 🧠 Estrutura Geral do Projeto
 
-### 1️⃣ Pré-requisitos
+📂 Vledger/
+├── app.py
+├── pages/
+│ ├── empresas.py
+│ ├── referencias.py
+│ └── classificacao.py
+├── vledger.db
+├── requirements.txt
+└── README.md
 
-* Python 3.8 ou superior
+yaml
+Copiar código
 
-### 2️⃣ Instale as bibliotecas necessárias
+---
 
+## 🧩 Banco de Dados: `vledger.db`
+
+O sistema utiliza **SQLite** para armazenar todos os dados localmente.  
+As principais tabelas são:
+
+### 🏢 `empresas`
+| Campo | Tipo | Descrição |
+|-------|------|------------|
+| id | INTEGER | Chave primária |
+| nome_empresa | TEXT | Nome da empresa |
+| cnpj | TEXT | CNPJ da empresa (opcional) |
+| responsavel | TEXT | Nome do responsável |
+
+---
+
+### 📘 `referencias`
+| Campo | Tipo | Descrição |
+|-------|------|------------|
+| id | INTEGER | Chave primária |
+| empresa_id | INTEGER | ID da empresa (chave estrangeira) |
+| nome | TEXT | Nome ou palavra-chave para busca na descrição |
+| conta_d | TEXT | Conta de débito |
+| conta_e | TEXT | Conta de crédito |
+
+---
+
+### 📚 `classificacoes`
+| Campo | Tipo | Descrição |
+|-------|------|------------|
+| id | INTEGER | Chave primária |
+| empresa_id | INTEGER | ID da empresa |
+| descricao | TEXT | Descrição da movimentação |
+| debito | TEXT | Conta de débito atribuída |
+| credito | TEXT | Conta de crédito atribuída |
+| valor | REAL | Valor do lançamento |
+| data_movimento | TEXT | Data original do movimento |
+| data_processamento | TEXT | Data/hora em que foi classificado |
+
+---
+
+## ⚙️ Instalação e Configuração
+
+### 1️⃣ Clonar o projeto
 ```bash
-pip install streamlit pandas openpyxl
-```
+git clone https://github.com/seu-usuario/vledger.git
+cd vledger
+2️⃣ Criar ambiente virtual (opcional, mas recomendado)
+bash
+Copiar código
+python -m venv .venv
+.venv\Scripts\activate   # (no Windows)
+3️⃣ Instalar as dependências
+Crie o arquivo requirements.txt com o seguinte conteúdo:
 
-### 3️⃣ Execute o sistema
+nginx
+Copiar código
+streamlit
+pandas
+openpyxl
+E instale com:
 
-```bash
-streamlit run Vledger_app.py
-```
+bash
+Copiar código
+pip install -r requirements.txt
+4️⃣ Executar o sistema
+bash
+Copiar código
+streamlit run app.py
+O navegador abrirá automaticamente em:
+👉 http://localhost:8501
 
-O sistema abrirá automaticamente no navegador (geralmente em `http://localhost:8501`).
+🖥️ Como Usar
+🏢 Página Empresas
+Cadastre as empresas que terão classificações.
 
----
+Cada empresa tem seu próprio conjunto de referências e classificações.
 
-## 🧮 Como usar
+🔗 Página Referências
+Cadastre as palavras-chave que o sistema deve procurar nas descrições dos lançamentos.
 
-1. **Abra o Vledger**
+Para cada palavra, informe a conta de débito e a conta de crédito correspondentes.
 
-   * Execute o comando acima e acesse a interface.
+Exemplo:
 
-2. **Anexe os arquivos**
+Nome (descrição)	Conta Débito	Conta Crédito
+PIX Recebido	1.1.1	3.1.1
+Pagamento Fornecedor	2.1.3	1.1.1
 
-   * **Extrato**: planilha com colunas como Data, Descrição e Valor.
-   * **Referência**: planilha com as colunas `Nome`, `Conta_D` e `Conta_E`.
+⚙️ Página Classificação
+Selecione a empresa desejada.
 
-3. **Configure o modo de correspondência** (Substring, Palavra inteira ou Regex)
+Faça o upload do extrato (CSV ou XLSX).
 
-4. **Clique em “Executar classificação”**
+O sistema tentará classificar automaticamente com base nas referências cadastradas.
 
-   * O sistema cruzará os dados e preencherá as contas Débito e Crédito.
+Visualize o resultado e clique em 💾 Salvar classificações no banco.
 
-5. **Baixe o resultado**
+Os lançamentos serão gravados na tabela classificacoes.
 
-   * Faça download do arquivo final em formato Excel (.xlsx).
+Você pode consultar o histórico agrupado por Ano → Mês.
 
----
+🧾 Formato Esperado do Extrato
+O arquivo deve conter pelo menos uma coluna de descrição e uma coluna de valor.
+O sistema identifica automaticamente o nome das colunas (ex: “Descrição”, “Histórico”, “Valor”, “Data”).
 
-## 🧾 Exemplo de Tabela de Referência
+Exemplo:
 
-| Nome        | Conta_D | Conta_E |
-| ----------- | ------- | ------- |
-| Intermedica | 282     | 537     |
-| Amil        | 310     | 537     |
-| Unimed      | 295     | 537     |
-| Sulamerica  | 320     | 537     |
-| Bradesco    | 400     | 537     |
+Data	Descrição	Valor
+01/01/2024	PIX Recebido de João	150.00
+03/01/2024	Pagamento Fornecedor XPTO	-500.00
 
----
+🧰 Como visualizar o banco vledger.db
+Você pode inspecionar os dados usando o DB Browser for SQLite (gratuito).
 
-## 💡 Exemplo de Resultado Gerado
+Passos:
+Abra o programa DB Browser for SQLite
 
-| Data       | Descrição            | Valor  | Débito | Crédito |
-| ---------- | -------------------- | ------ | ------ | ------- |
-| 05/10/2025 | INTERMEDICA          | 5,00   | 282    | 537     |
-| 06/10/2025 | ASHS INTERMEDICA ASA | 10,00  | 282    | 537     |
-| 07/10/2025 | Amil                 | 2,00   | 310    | 537     |
-| 07/10/2025 | Unimed               | 500,00 | 295    | 537     |
+Clique em “Abrir Banco de Dados”
 
----
+Selecione o arquivo vledger.db
 
-## 🧠 Ideias Futuras
+Vá até a aba “Navegar pelos dados”
 
-* Edição manual das classificações diretamente na interface
-* Fuzzy Matching (para detectar nomes parecidos)
-* Aprendizado com correções do usuário
-* Integração com SharePoint, Power BI ou sistemas contábeis
-* Histórico de execuções e relatórios analíticos
+Escolha a tabela: empresas, referencias ou classificacoes
 
----
+Dica: use o botão “Executar SQL” para rodar consultas, por exemplo:
 
-## 👩‍💻 Autoria
+sql
+Copiar código
+SELECT * FROM classificacoes ORDER BY data_processamento DESC;
+📤 Exportação
+Após a classificação, é possível:
 
-Desenvolvido por **Lucilia Rosa**
-💬 *Vledger — Inteligência para seus lançamentos contábeis*
+Baixar o arquivo classificado em Excel (.xlsx)
+
+O nome do arquivo segue o formato:
+
+php-template
+Copiar código
+classificacao_<empresa>_<datahora>.xlsx
+🧑‍💻 Tecnologias Utilizadas
+Python 3.12+
+
+Streamlit (interface web)
+
+Pandas (manipulação de dados)
+
+SQLite3 (banco de dados local)
+
+OpenPyXL (para leitura/escrita de Excel)
+
+🧩 Futuras melhorias
+Implementar exclusão/edição de classificações
+
+Adicionar filtros e buscas avançadas
+
+Relatórios contábeis automáticos
+
+Integração com Power BI ou Excel Online
+
+✍️ Autoria
+Desenvolvido por: Lucilia dos Passos Rosa
+📅 Projeto Vledger — 2025
+💼 Sistema interno para classificação contábil inteligente.
