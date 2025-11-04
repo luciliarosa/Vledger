@@ -1,144 +1,248 @@
 import streamlit as st
-import pandas as pd
 import sqlite3
-import io
+import pandas as pd
+from datetime import datetime
 
-st.set_page_config(page_title="Referências - Vledger", page_icon="📘", layout="wide")
+# =========================================
+# Funções utilitárias e banco de dados
+# =========================================
+def conectar():
+    return sqlite3.connect("vledger.db")
 
-st.title("Cadastro de Referências")
-st.caption("Gerencie as palavras-chave e contas usadas na classificação automática de lançamentos.")
+def ensure_tables_and_columns():
+    conn = conectar()
+    cur = conn.cursor()
 
-# ============================================
-# 1️⃣ Banco de dados
-# ============================================
-def init_db():
-    conn = sqlite3.connect("vledger.db")
-    c = conn.cursor()
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS referencias (
+    # 1) garante que a tabela empresas exista
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS empresas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            nome TEXT UNIQUE,
-            conta_d INTEGER,
-            conta_e INTEGER
+            nome_empresa TEXT NOT NULL,
+            cnpj TEXT,
+            responsavel TEXT,
+            data_cadastro TEXT
         )
     """)
+
+    # 2) cria a tabela referencias se não existir (com todas as colunas corretas)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS referencias (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            empresa_id INTEGER NOT NULL,
+            nome TEXT NOT NULL,
+            conta_d TEXT,
+            conta_e TEXT,
+            data_cadastro TEXT,
+            FOREIGN KEY (empresa_id) REFERENCES empresas (id)
+        )
+    """)
+
+    # 3) garantir que a coluna data_cadastro exista
+    cur.execute("PRAGMA table_info(referencias)")
+    cols = [row[1] for row in cur.fetchall()]
+    if "data_cadastro" not in cols:
+        try:
+            cur.execute("ALTER TABLE referencias ADD COLUMN data_cadastro TEXT")
+            conn.commit()
+            print("Added column data_cadastro to referencias")
+        except Exception as e:
+            print("Could not add column data_cadastro:", e)
+
+    conn.close()
+
+
+def ensure_empresa_id_column():
+    """Garante que a coluna empresa_id exista na tabela referencias"""
+    conn = conectar()
+    cur = conn.cursor()
+
+    cur.execute("PRAGMA table_info(referencias)")
+    cols = [row[1] for row in cur.fetchall()]
+
+    if "empresa_id" not in cols:
+        st.warning("⚙️ Atualizando estrutura da tabela 'referencias'...")
+
+        # Renomeia a tabela antiga
+        cur.execute("ALTER TABLE referencias RENAME TO referencias_old")
+
+        # Cria a nova tabela com a estrutura correta
+        cur.execute("""
+            CREATE TABLE referencias (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                empresa_id INTEGER NOT NULL,
+                nome TEXT NOT NULL,
+                conta_d TEXT,
+                conta_e TEXT,
+                data_cadastro TEXT,
+                FOREIGN KEY (empresa_id) REFERENCES empresas (id)
+            )
+        """)
+
+        # Copia os dados antigos
+        try:
+            cur.execute("""
+                INSERT INTO referencias (id, nome, conta_d, conta_e, data_cadastro)
+                SELECT id, nome, conta_d, conta_e, data_cadastro FROM referencias_old
+            """)
+        except Exception as e:
+            st.error(f"Erro ao migrar dados antigos: {e}")
+
+        # Remove a tabela antiga
+        cur.execute("DROP TABLE referencias_old")
+        conn.commit()
+        st.success("✅ Estrutura da tabela 'referencias' atualizada com sucesso!")
+
+    conn.close()
+
+
+# Executa verificações ao abrir a página
+ensure_tables_and_columns()
+ensure_empresa_id_column()
+
+
+# =========================================
+# Página: Referências (Plano Contábil)
+# =========================================
+st.set_page_config(page_title="Plano Contábil | Vledger", page_icon="📘", layout="wide")
+
+st.title("📘 Plano Contábil")
+st.caption("Gerencie as referências contábeis de cada empresa")
+
+
+# =========================================
+# Funções CRUD
+# =========================================
+def listar_empresas():
+    conn = conectar()
+    empresas = conn.execute("SELECT id, nome_empresa FROM empresas ORDER BY nome_empresa").fetchall()
+    conn.close()
+    return empresas
+
+def inserir_referencia(empresa_id, nome, conta_d, conta_e):
+    conn = conectar()
+    data_cadastro = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    conn.execute(
+        "INSERT INTO referencias (empresa_id, nome, conta_d, conta_e, data_cadastro) VALUES (?, ?, ?, ?, ?)",
+        (empresa_id, nome, conta_d, conta_e, data_cadastro),
+    )
     conn.commit()
     conn.close()
 
-def carregar_referencias():
-    conn = sqlite3.connect("vledger.db")
-    df = pd.read_sql_query("SELECT * FROM referencias", conn)
+def listar_referencias(empresa_id):
+    conn = conectar()
+    refs = conn.execute(
+        "SELECT id, nome, conta_d, conta_e, data_cadastro FROM referencias WHERE empresa_id=? ORDER BY nome",
+        (empresa_id,)
+    ).fetchall()
     conn.close()
-    return df
+    return refs
 
-def inserir_referencia(nome, conta_d, conta_e):
-    conn = sqlite3.connect("vledger.db")
-    c = conn.cursor()
-    c.execute("INSERT OR IGNORE INTO referencias (nome, conta_d, conta_e) VALUES (?, ?, ?)", (nome, conta_d, conta_e))
+def atualizar_referencia(ref_id, nome, conta_d, conta_e):
+    conn = conectar()
+    conn.execute("UPDATE referencias SET nome=?, conta_d=?, conta_e=? WHERE id=?",
+                 (nome, conta_d, conta_e, ref_id))
     conn.commit()
     conn.close()
 
-def atualizar_referencia(id_ref, nome, conta_d, conta_e):
-    conn = sqlite3.connect("vledger.db")
-    c = conn.cursor()
-    c.execute("UPDATE referencias SET nome=?, conta_d=?, conta_e=? WHERE id=?", (nome, conta_d, conta_e, id_ref))
+def excluir_referencia(ref_id):
+    conn = conectar()
+    conn.execute("DELETE FROM referencias WHERE id=?", (ref_id,))
     conn.commit()
     conn.close()
 
-def excluir_referencia(id_ref):
-    conn = sqlite3.connect("vledger.db")
-    c = conn.cursor()
-    c.execute("DELETE FROM referencias WHERE id=?", (id_ref,))
+def importar_referencias_csv(empresa_id, df):
+    conn = conectar()
+    for _, row in df.iterrows():
+        nome = str(row.get("Nome", "")).strip()
+        conta_d = str(row.get("Conta_D", "")).strip()
+        conta_e = str(row.get("Conta_E", "")).strip()
+        if nome:
+            data_cadastro = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            conn.execute(
+                "INSERT INTO referencias (empresa_id, nome, conta_d, conta_e, data_cadastro) VALUES (?, ?, ?, ?, ?)",
+                (empresa_id, nome, conta_d, conta_e, data_cadastro),
+            )
     conn.commit()
     conn.close()
 
-init_db()
 
-# ============================================
-# 2️⃣ Seção: Adicionar nova referência
-# ============================================
-with st.expander("➕ Adicionar Nova Referência", expanded=False):
+# =========================================
+# Seleção da empresa
+# =========================================
+empresas = listar_empresas()
+if len(empresas) == 0:
+    st.warning("Nenhuma empresa cadastrada. Vá até a página **Empresas** e cadastre pelo menos uma.")
+    st.stop()
+
+empresa_dict = {e[1]: e[0] for e in empresas}
+empresa_nome = st.selectbox("Selecione a empresa", list(empresa_dict.keys()))
+empresa_id = empresa_dict[empresa_nome]
+
+st.markdown(f"📊 **Plano contábil da empresa:** `{empresa_nome}`")
+
+
+# =========================================
+# Layout de seções organizadas
+# =========================================
+with st.expander("➕ Adicionar nova referência"):
     with st.form("form_add_ref", clear_on_submit=True):
-        nome = st.text_input("Nome (palavra-chave da descrição)")
-        conta_d = st.number_input("Conta Débito", min_value=0, step=1)
-        conta_e = st.number_input("Conta Crédito", min_value=0, step=1)
-        submitted = st.form_submit_button("Salvar Referência")
+        nome = st.text_input("Descrição / Palavra-chave *")
+        conta_d = st.text_input("Conta Débito")
+        conta_e = st.text_input("Conta Crédito")
+        submitted = st.form_submit_button("Salvar")
 
         if submitted:
             if nome.strip() == "":
-                st.error("O campo Nome é obrigatório.")
+                st.warning("O campo 'Descrição / Palavra-chave' é obrigatório.")
             else:
-                inserir_referencia(nome.strip(), conta_d, conta_e)
-                st.success(f"Referência '{nome}' adicionada com sucesso!")
+                inserir_referencia(empresa_id, nome, conta_d, conta_e)
+                st.success(f"Referência **{nome}** adicionada com sucesso!")
 
-# ============================================
-# 3️⃣ Seção: Importar arquivo modelo
-# ============================================
-with st.expander("📤 Importar Modelo de Referência", expanded=False):
-    st.info("Envie uma planilha com as colunas: **Nome**, **Conta_D**, **Conta_E**.")
-
-    # Modelo para download
-    modelo = pd.DataFrame({
-        "Nome": ["Intermedica", "Amil", "Unimed"],
-        "Conta_D": [282, 310, 295],
-        "Conta_E": [537, 537, 537]
-    })
-    buffer = io.BytesIO()
-    modelo.to_excel(buffer, index=False)
-    buffer.seek(0)
-    st.download_button("📥 Baixar Modelo de Referência", data=buffer, file_name="modelo_referencia.xlsx")
-
-    arquivo_upload = st.file_uploader("Envie seu arquivo (CSV ou XLSX)", type=["csv", "xlsx"])
-
-    if arquivo_upload:
+with st.expander("📥 Importar referências de arquivo (CSV ou XLSX)"):
+    uploaded_file = st.file_uploader("Selecione um arquivo de referência", type=["csv", "xlsx"])
+    if uploaded_file:
         try:
-            if arquivo_upload.name.endswith(".csv"):
-                df_upload = pd.read_csv(arquivo_upload)
+            if uploaded_file.name.endswith(".csv"):
+                df = pd.read_csv(uploaded_file)
             else:
-                df_upload = pd.read_excel(arquivo_upload)
-
-            cols_lower = [c.lower() for c in df_upload.columns]
-            if not all(col in cols_lower for col in ["nome", "conta_d", "conta_e"]):
-                st.error("O arquivo deve conter as colunas Nome, Conta_D e Conta_E.")
-            else:
-                for _, row in df_upload.iterrows():
-                    inserir_referencia(str(row["Nome"]), int(row["Conta_D"]), int(row["Conta_E"]))
-                st.success(f"{len(df_upload)} referências importadas com sucesso!")
+                df = pd.read_excel(uploaded_file)
+            st.dataframe(df)
+            if st.button("Importar referências do arquivo"):
+                importar_referencias_csv(empresa_id, df)
+                st.success("Referências importadas com sucesso!")
+                st.experimental_rerun()
         except Exception as e:
-            st.error(f"Erro ao importar: {e}")
+            st.error(f"Erro ao ler o arquivo: {e}")
 
-# ============================================
-# 4️⃣ Seção: Referências cadastradas
-# ============================================
-with st.expander("🧾 Referências Cadastradas", expanded=True):
-    df = carregar_referencias()
-    if df.empty:
-        st.info("Nenhuma referência cadastrada ainda.")
+with st.expander("📋 Referências cadastradas"):
+    refs = listar_referencias(empresa_id)
+    if len(refs) == 0:
+        st.info("Nenhuma referência cadastrada para esta empresa.")
     else:
-        st.dataframe(df, use_container_width=True)
+        df_refs = pd.DataFrame(refs, columns=["ID", "Nome", "Conta Débito", "Conta Crédito", "Data Cadastro"])
+        st.dataframe(df_refs, use_container_width=True)
 
-        # Editar / excluir
-        st.markdown("#### ✏️ Editar ou Excluir Referência")
+with st.expander("⚙️ Editar ou excluir referência"):
+    refs = listar_referencias(empresa_id)
+    if len(refs) == 0:
+        st.info("Nenhuma referência para editar.")
+    else:
+        ref_dict = {f"{r[1]} (ID: {r[0]})": r for r in refs}
+        escolha = st.selectbox("Selecione uma referência", list(ref_dict.keys()))
+        ref = ref_dict[escolha]
 
-        nomes = df["nome"].tolist()
-        escolha = st.selectbox("Selecione uma referência", options=[""] + nomes)
+        nome_edit = st.text_input("Descrição / Palavra-chave", ref[1])
+        conta_d_edit = st.text_input("Conta Débito", ref[2] or "")
+        conta_e_edit = st.text_input("Conta Crédito", ref[3] or "")
 
-        if escolha:
-            ref_row = df[df["nome"] == escolha].iloc[0]
-            with st.form("form_edit_ref"):
-                novo_nome = st.text_input("Nome", ref_row["nome"])
-                novo_d = st.number_input("Conta Débito", value=int(ref_row["conta_d"]), min_value=0, step=1)
-                novo_e = st.number_input("Conta Crédito", value=int(ref_row["conta_e"]), min_value=0, step=1)
-
-                col1, col2 = st.columns(2)
-                with col1:
-                    if st.form_submit_button("Salvar Alterações"):
-                        atualizar_referencia(ref_row["id"], novo_nome, novo_d, novo_e)
-                        st.success("Referência atualizada!")
-                with col2:
-                    if st.form_submit_button("Excluir"):
-                        excluir_referencia(ref_row["id"])
-                        st.warning("Referência excluída!")
-
-st.markdown("---")
-st.caption("Vledger — Inteligência para seus lançamentos contábeis")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("💾 Salvar alterações"):
+                atualizar_referencia(ref[0], nome_edit, conta_d_edit, conta_e_edit)
+                st.success("Referência atualizada com sucesso!")
+                st.experimental_rerun()
+        with col2:
+            if st.button("🗑️ Excluir referência"):
+                excluir_referencia(ref[0])
+                st.warning(f"Referência '{ref[1]}' excluída.")
+                st.experimental_rerun()

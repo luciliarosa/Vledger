@@ -4,46 +4,67 @@ import sqlite3
 import io
 from datetime import datetime
 
-# -----------------------------
-# Página: Classificação de Extratos
-# -----------------------------
+st.set_page_config(page_title="Classificação | Vledger", page_icon="⚙️", layout="wide")
+st.title("⚙️ Classificação de Lançamentos")
+st.caption("Classifique o extrato com base no plano contábil da empresa selecionada")
 
-st.set_page_config(page_title="Classificação - Vledger", page_icon="📘", layout="wide")
+# ----------------------------
+# Banco de dados
+# ----------------------------
+def conectar():
+    return sqlite3.connect("vledger.db")
 
-st.title("Classificação de Extratos")
-st.caption("Use as referências salvas para preencher automaticamente as contas Débito e Crédito.")
+def listar_empresas():
+    conn = conectar()
+    empresas = conn.execute("SELECT id, nome_empresa FROM empresas ORDER BY nome_empresa").fetchall()
+    conn.close()
+    return empresas
 
-st.markdown("---")
+def listar_referencias(empresa_id):
+    conn = conectar()
+    refs = conn.execute(
+        "SELECT nome, conta_d, conta_e FROM referencias WHERE empresa_id=? ORDER BY nome",
+        (empresa_id,)
+    ).fetchall()
+    conn.close()
+    return refs
 
-# ============================================
-# 1️⃣ Carregar referências do banco SQLite
-# ============================================
-def carregar_referencias():
-    try:
-        conn = sqlite3.connect("vledger.db")
-        df = pd.read_sql_query("SELECT * FROM referencias", conn)
-        conn.close()
-        return df
-    except Exception as e:
-        st.error(f"Erro ao carregar referências: {e}")
-        return pd.DataFrame()
+def salvar_classificacoes(empresa_id, df):
+    conn = conectar()
+    for _, row in df.iterrows():
+        conn.execute(
+            "INSERT INTO classificacoes (empresa_id, descricao, debito, credito, valor, data_processamento) VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                empresa_id,
+                str(row.get("Descrição", "")),
+                str(row.get("Débito", "")),
+                str(row.get("Crédito", "")),
+                float(row.get("Valor", 0)) if pd.notna(row.get("Valor")) else 0.0,
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            ),
+        )
+    conn.commit()
+    conn.close()
 
-df_ref = carregar_referencias()
-
-if df_ref.empty:
-    st.warning("Nenhuma referência encontrada. Vá até a aba **Referências** e cadastre os nomes e contas primeiro.")
+# ----------------------------
+# Seleção de empresa
+# ----------------------------
+empresas = listar_empresas()
+if len(empresas) == 0:
+    st.warning("Nenhuma empresa cadastrada. Vá até a página **Empresas** e cadastre pelo menos uma.")
     st.stop()
 
-# Mostrar as referências
-with st.expander("Ver referências cadastradas"):
-    st.dataframe(df_ref)
+empresa_dict = {e[1]: e[0] for e in empresas}
+empresa_nome = st.selectbox("Selecione a empresa", list(empresa_dict.keys()))
+empresa_id = empresa_dict[empresa_nome]
 
-# ============================================
-# 2️⃣ Upload do extrato
-# ============================================
-arquivo_extrato = st.file_uploader("📎 Envie o extrato bancário (CSV ou XLSX)", type=["csv", "xlsx"])
+st.markdown(f"📊 **Classificando lançamentos da empresa:** `{empresa_nome}`")
 
-@st.cache_data
+# ----------------------------
+# Upload do extrato
+# ----------------------------
+arquivo_extrato = st.file_uploader("Anexe o extrato (CSV ou XLSX)", type=["csv", "xlsx"])
+
 def read_table(uploaded_file):
     if uploaded_file is None:
         return None
@@ -60,86 +81,55 @@ def read_table(uploaded_file):
 df_extrato = read_table(arquivo_extrato)
 
 if df_extrato is not None:
-    st.subheader("Pré-visualização do extrato")
+    st.subheader("📄 Pré-visualização do extrato")
     st.dataframe(df_extrato.head(15))
 
-st.markdown("---")
-
-# ============================================
-# 3️⃣ Executar Classificação
-# ============================================
-if st.button("Executar Classificação Automática"):
-    if df_extrato is None:
-        st.error("Envie um extrato para iniciar a classificação.")
+# ----------------------------
+# Classificação
+# ----------------------------
+if st.button("Executar classificação"):
+    refs = listar_referencias(empresa_id)
+    if len(refs) == 0:
+        st.error("Nenhuma referência encontrada para esta empresa.")
         st.stop()
 
     df = df_extrato.copy()
-    ref = df_ref.copy()
-
-    # Detectar a coluna de descrição
-    col_desc = None
-    for c in df.columns:
-        if c.strip().lower() in ["descrição", "descricao", "description", "historico", "hist"]:
-            col_desc = c
-            break
-    if col_desc is None:
-        if len(df.columns) >= 2:
-            col_desc = df.columns[1]
-            st.warning(f"Não encontrei uma coluna chamada 'Descrição'. Usando: {col_desc}")
-        else:
-            st.error("Não foi possível identificar a coluna de descrição.")
-            st.stop()
-
-    # Adicionar colunas de resultado
     df["Débito"] = ""
     df["Crédito"] = ""
-    df["_match"] = ""
 
-    # Loop de correspondência
+    colunas = [c.lower() for c in df.columns]
+    col_desc = None
+    for c in df.columns:
+        if "descr" in c.lower() or "hist" in c.lower():
+            col_desc = c
+            break
+    if not col_desc and len(df.columns) >= 2:
+        col_desc = df.columns[1]
+        st.warning(f"Não encontrei uma coluna de descrição. Usando '{col_desc}'.")
+
     for i, row in df.iterrows():
-        desc = str(row[col_desc]).lower() if pd.notna(row[col_desc]) else ""
-        matched = False
-        for j, r in ref.iterrows():
-            chave = str(r["nome"]).lower()
-            if chave in desc:
-                df.at[i, "Débito"] = r["conta_d"]
-                df.at[i, "Crédito"] = r["conta_e"]
-                df.at[i, "_match"] = r["nome"]
-                matched = True
+        desc = str(row[col_desc]).lower()
+        for nome, conta_d, conta_e in refs:
+            if nome.lower() in desc:
+                df.at[i, "Débito"] = conta_d
+                df.at[i, "Crédito"] = conta_e
                 break
-        if not matched:
-            df.at[i, "Débito"] = ""
-            df.at[i, "Crédito"] = ""
 
-    # Mostrar resultado
-    st.success("Classificação concluída!")
-    st.subheader("Resultado (pré-visualização)")
+    st.success("Classificação concluída ✅")
     st.dataframe(df.head(15))
 
-    # Linhas não classificadas
-    not_found = df[df["Débito"] == ""]
-    if not not_found.empty:
-        st.warning(f"Foram encontradas {len(not_found)} linhas sem correspondência automática.")
-        with st.expander("Visualizar linhas não classificadas"):
-            st.dataframe(not_found[[col_desc]])
+    # Permite salvar no banco
+    if st.button("💾 Salvar classificações no banco"):
+        salvar_classificacoes(empresa_id, df)
+        st.success("Lançamentos salvos com sucesso no banco!")
 
-    # Resumo de correspondências
-    st.subheader("Resumo de correspondências encontradas")
-    resumo = df["_match"].value_counts().rename_axis("Referência").reset_index(name="Ocorrências")
-    st.table(resumo)
-
-    # Exportar para Excel
+    # Download Excel
     towrite = io.BytesIO()
-    now = datetime.now().strftime("%Y%m%d_%H%M%S")
-    df.to_excel(towrite, index=False, sheet_name="Classificação")
+    df.to_excel(towrite, index=False, sheet_name="Classificacao_Vledger")
     towrite.seek(0)
     st.download_button(
-        label=f"Baixar Resultado (Vledger_{now}.xlsx)",
+        label="📥 Baixar resultado (XLSX)",
         data=towrite,
-        file_name=f"Vledger_{now}.xlsx",
+        file_name=f"classificacao_{empresa_nome}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
-
-# Rodapé
-st.markdown("---")
-st.caption("Vledger — Inteligência para seus lançamentos contábeis")
